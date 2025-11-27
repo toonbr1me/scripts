@@ -75,8 +75,10 @@ ENV_FILE="$APP_DIR/.env"
 SSL_CERT_FILE="$DATA_DIR/certs/ssl_cert.pem"
 SSL_KEY_FILE="$DATA_DIR/certs/ssl_key.pem"
 LAST_XRAY_CORES=5
-FETCH_REPO="PasarGuard/scripts"
+FETCH_REPO="toonbr1me/scripts"
 SCRIPT_URL="https://github.com/$FETCH_REPO/raw/main/pg-node.sh"
+FORCED_XRAY_VERSION=""
+SELECTED_SINGBOX_VERSION=""
 
 colorized_echo() {
     local color=$1
@@ -106,6 +108,26 @@ colorized_echo() {
         echo "${text}"
         ;;
     esac
+}
+
+ensure_env_value() {
+    local key="$1"
+    local value="$2"
+    local file="${3:-$ENV_FILE}"
+
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
+        echo "error: env file $file not found" >&2
+        return 1
+    fi
+
+    # Un-comment if the key exists but is commented
+    sed -i "s|^# *${key}[[:space:]]*=.*|${key}= ${value}|" "$file"
+
+    if grep -q "^${key}[[:space:]]*=" "$file"; then
+        sed -i "s|^${key}[[:space:]]*=.*|${key}= ${value}|" "$file"
+    else
+        echo "${key}= ${value}" >>"$file"
+    fi
 }
 
 check_running_as_root() {
@@ -365,8 +387,8 @@ read_and_save_file() {
 install_node() {
     local node_version=$1
 
-    FILES_URL_PREFIX="https://raw.githubusercontent.com/PasarGuard/node/main"
-    COMPOSE_FILES_URL_PREFIX="https://raw.githubusercontent.com/PasarGuard/scripts/main"
+    FILES_URL_PREFIX="https://raw.githubusercontent.com/toonbr1me/node/main"
+    COMPOSE_FILES_URL_PREFIX="https://raw.githubusercontent.com/toonbr1me/scripts/main"
 
     mkdir -p "$DATA_DIR"
     mkdir -p "$DATA_DIR/certs"
@@ -456,6 +478,11 @@ install_node() {
     else
         sed -i 's/^# \(SERVICE_PROTOCOL *=.*\)/SERVICE_PROTOCOL= "grpc"/' "$APP_DIR/.env"
     fi
+
+    ensure_env_value "XRAY_EXECUTABLE_PATH" "/var/lib/pg-node/xray-core/xray"
+    ensure_env_value "XRAY_ASSETS_PATH" "/var/lib/pg-node/assets"
+    ensure_env_value "SINGBOX_EXECUTABLE_PATH" "/var/lib/pg-node/sing-box-core/sing-box"
+    ensure_env_value "SINGBOX_ASSETS_PATH" "/var/lib/pg-node/sing-box-core/assets"
 
     colorized_echo green ".env file modified successfully"
 
@@ -631,7 +658,7 @@ install_command() {
     # Function to check if a version exists in the GitHub releases
     check_version_exists() {
         local version=$1
-        repo_url="https://api.github.com/repos/PasarGuard/node/releases"
+        repo_url="https://api.github.com/repos/toonbr1me/node/releases"
 
         if [ "$version" == "latest" ]; then
             latest_tag=$(curl -s ${repo_url}/latest | jq -r '.tag_name')
@@ -1043,7 +1070,13 @@ get_xray_core() {
 
     versions=($(echo "$latest_releases" | grep -oP '"tag_name": "\K(.*?)(?=")'))
 
-    if [ "$AUTO_CONFIRM" = true ]; then
+    if [[ -n "${FORCED_XRAY_VERSION}" ]]; then
+        if [ "$(validate_version "$FORCED_XRAY_VERSION")" != "valid" ]; then
+            colorized_echo red "Invalid Xray-core version: $FORCED_XRAY_VERSION"
+            exit 1
+        fi
+        selected_version="$FORCED_XRAY_VERSION"
+    elif [ "$AUTO_CONFIRM" = true ]; then
         selected_version=${versions[0]}
     else
         while true; do
@@ -1125,6 +1158,89 @@ get_current_xray_core_version() {
     echo "Not installed"
 }
 
+map_singbox_arch_from_arch() {
+    case "$ARCH" in
+    '64' | 'x86_64') echo 'amd64' ;;
+    'arm64-v8a' | 'aarch64') echo 'arm64' ;;
+    'arm32-v7a') echo 'armv7' ;;
+    '32' | 'i386' | 'i686') echo '386' ;;
+    *) echo '' ;;
+    esac
+}
+
+get_current_singbox_core_version() {
+    local binary="$DATA_DIR/sing-box-core/sing-box"
+    if [ -f "$binary" ]; then
+        version_output=$("$binary" version 2>/dev/null | head -n1)
+        if [ -n "$version_output" ]; then
+            echo "$version_output"
+            return
+        fi
+    fi
+    echo "Not installed"
+}
+
+install_singbox_core() {
+    local version_tag="$1"
+    local version_no_v="${version_tag#v}"
+    local sing_arch
+    sing_arch=$(map_singbox_arch_from_arch)
+
+    if [[ -z "$sing_arch" ]]; then
+        colorized_echo red "Unsupported architecture $ARCH for sing-box"
+        exit 1
+    fi
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    local file_name="sing-box-${version_no_v}-linux-${sing_arch}.tar.gz"
+    local download_url="https://github.com/SagerNet/sing-box/releases/download/${version_tag}/${file_name}"
+
+    colorized_echo blue "Downloading Sing-Box core ${version_tag}..."
+    if ! curl -sSL "$download_url" -o "$tmp_dir/$file_name"; then
+        colorized_echo red "Failed to download Sing-Box package"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    if ! tar -xzf "$tmp_dir/$file_name" -C "$tmp_dir" >/dev/null 2>&1; then
+        colorized_echo red "Failed to extract Sing-Box archive"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    local extracted_dir="$tmp_dir/sing-box-${version_no_v}-linux-${sing_arch}"
+    mkdir -p "$DATA_DIR/sing-box-core/assets"
+    install -m 755 "$extracted_dir/sing-box" "$DATA_DIR/sing-box-core/sing-box"
+
+    for data_file in geoip.db geosite.db geoip.mmdb geosite.mmdb; do
+        if [ -f "$extracted_dir/$data_file" ]; then
+            install -m 644 "$extracted_dir/$data_file" "$DATA_DIR/sing-box-core/assets/$data_file"
+        fi
+    done
+
+    rm -rf "$tmp_dir"
+    SELECTED_SINGBOX_VERSION="$version_tag"
+}
+
+resolve_singbox_version() {
+    local requested="$1"
+    local repo_url="https://api.github.com/repos/SagerNet/sing-box"
+
+    if [[ -z "$requested" || "$requested" == "latest" ]]; then
+        curl -s "$repo_url/releases/latest" | jq -r '.tag_name'
+        return
+    fi
+
+    local status
+    status=$(curl -s -o /dev/null -w "%{http_code}" "$repo_url/releases/tags/$requested")
+    if [[ "$status" != "200" ]]; then
+        echo ""
+    else
+        echo "$requested"
+    fi
+}
+
 install_yq() {
     if command -v yq &>/dev/null; then
         colorized_echo green "yq is already installed."
@@ -1202,37 +1318,160 @@ install_yq() {
     fi
 }
 
-update_core_command() {
-    check_running_as_root
-    get_xray_core
+sync_volume_and_get_container_path() {
+    local service_name="node"
+    local existing_volume=$(yq eval -r ".services[\"$service_name\"].volumes[0]" "$APP_DIR/docker-compose.yml")
+    local container_path="/var/lib/pg-node"
 
-    # Ensure volumes match DATA_DIR when custom name is used
-    service_name="node"
-    existing_volume=$(yq eval -r ".services[\"$service_name\"].volumes[0]" "$APP_DIR/docker-compose.yml")
     if [ -n "$existing_volume" ] && [ "$existing_volume" != "null" ]; then
-        # Extract container path (everything after the colon)
         if [[ "$existing_volume" == *:* ]]; then
             container_path="${existing_volume#*:}"
         else
-            # If no colon found, use the existing volume as container path
             container_path="$existing_volume"
         fi
-        # Update volumes to use DATA_DIR (which is based on APP_NAME)
         yq eval ".services[\"$service_name\"].volumes[0] = \"${DATA_DIR}:${container_path}\"" -i "$APP_DIR/docker-compose.yml"
-
-        # Set XRAY_EXECUTABLE_PATH to the container path, not host path
-        sed -i "s|^# *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH= ${container_path}/xray-core/xray|" "$APP_DIR/.env"
-        grep -q '^XRAY_EXECUTABLE_PATH=' "$APP_DIR/.env" || echo "XRAY_EXECUTABLE_PATH= ${container_path}/xray-core/xray" >>"$APP_DIR/.env"
     else
-        # Fallback to default if no volume found
-        sed -i "s|^# *XRAY_EXECUTABLE_PATH *=.*|XRAY_EXECUTABLE_PATH= /var/lib/pg-node/xray-core/xray|" "$APP_DIR/.env"
-        grep -q '^XRAY_EXECUTABLE_PATH=' "$APP_DIR/.env" || echo "XRAY_EXECUTABLE_PATH= /var/lib/pg-node/xray-core/xray" >>"$APP_DIR/.env"
+        yq eval ".services[\"$service_name\"].volumes[0] = \"${DATA_DIR}:${container_path}\"" -i "$APP_DIR/docker-compose.yml"
     fi
 
-    # Restart node
-    colorized_echo red "Restarting node..."
-    restart_command -n
-    colorized_echo blue "Installation of XRAY-CORE version $selected_version completed."
+    echo "$container_path"
+}
+
+update_core_env_paths() {
+    local core="$1"
+    local container_path="$2"
+
+    case "$core" in
+    xray)
+        ensure_env_value "XRAY_EXECUTABLE_PATH" "${container_path}/xray-core/xray"
+        ensure_env_value "XRAY_ASSETS_PATH" "${container_path}/assets"
+        ;;
+    sing-box|singbox|sing)
+        ensure_env_value "SINGBOX_EXECUTABLE_PATH" "${container_path}/sing-box-core/sing-box"
+        ensure_env_value "SINGBOX_ASSETS_PATH" "${container_path}/sing-box-core/assets"
+        ;;
+    esac
+}
+
+update_core_command() {
+    check_running_as_root
+
+    if ! command -v jq >/dev/null 2>&1; then
+        detect_os
+        install_package jq
+    fi
+
+    if ! command -v yq >/dev/null 2>&1; then
+        install_yq
+    fi
+
+    local target_core="xray"
+    local requested_version=""
+    local show_help=false
+    local core_arg_supplied=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        --core)
+            target_core="${2:-xray}"
+            core_arg_supplied=true
+            shift 2
+            ;;
+        --core=*)
+            target_core="${1#*=}"
+            core_arg_supplied=true
+            shift
+            ;;
+        --version)
+            requested_version="${2:-}"
+            shift 2
+            ;;
+        --version=*)
+            requested_version="${1#*=}"
+            shift
+            ;;
+        -h | --help)
+            show_help=true
+            shift
+            ;;
+        *)
+            colorized_echo red "Unknown option: $1"
+            return 1
+            ;;
+        esac
+    done
+
+    if [ "$show_help" = true ]; then
+        colorized_echo cyan "Usage: $APP_NAME core-update [--core xray|sing-box|all] [--version vX.Y.Z]"
+        return 0
+    fi
+
+    target_core=$(echo "$target_core" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$core_arg_supplied" = false ] && [ -t 0 ]; then
+        colorized_echo cyan "Select which core to update:"
+        echo "  1) Xray"
+        echo "  2) Sing-Box"
+        echo "  3) Both"
+        read -rp "Choice [1]: " core_choice
+        case "$core_choice" in
+            2)
+                target_core="sing-box"
+                ;;
+            3)
+                target_core="all"
+                ;;
+            ""|1|*)
+                target_core="xray"
+                ;;
+        esac
+    fi
+    if [[ "$target_core" == "all" && -n "$requested_version" ]]; then
+        colorized_echo red "--version can only be used with --core xray or --core sing-box"
+        exit 1
+    fi
+
+    local updated=false
+    local container_path
+    container_path=$(sync_volume_and_get_container_path)
+
+    if [[ "$target_core" == "xray" || "$target_core" == "all" ]]; then
+        if [[ -n "$requested_version" && "$target_core" != "all" ]]; then
+            FORCED_XRAY_VERSION="$requested_version"
+        else
+            FORCED_XRAY_VERSION=""
+        fi
+        get_xray_core
+        FORCED_XRAY_VERSION=""
+        update_core_env_paths "xray" "$container_path"
+        updated=true
+        colorized_echo blue "Installation of XRAY-CORE version $selected_version completed."
+    fi
+
+    if [[ "$target_core" == "sing-box" || "$target_core" == "singbox" || "$target_core" == "sing" || "$target_core" == "all" ]]; then
+        local desired_version="$requested_version"
+        if [[ "$target_core" == "all" ]]; then
+            desired_version="latest"
+        fi
+        local resolved_version
+        resolved_version=$(resolve_singbox_version "$desired_version")
+        if [[ -z "$resolved_version" || "$resolved_version" == "null" ]]; then
+            colorized_echo red "Sing-Box version '$desired_version' not found"
+            exit 1
+        fi
+        identify_the_operating_system_and_architecture
+        install_singbox_core "$resolved_version"
+        update_core_env_paths "sing-box" "$container_path"
+        updated=true
+        colorized_echo blue "Installation of Sing-Box core version $SELECTED_SINGBOX_VERSION completed."
+    fi
+
+    if [ "$updated" = true ]; then
+        colorized_echo red "Restarting node..."
+        restart_command -n
+    else
+        colorized_echo yellow "No core updated. Use --core xray|sing-box|all"
+    fi
 }
 
 check_editor() {
@@ -1329,7 +1568,7 @@ usage() {
     colorized_echo yellow "  uninstall-script  $(tput sgr0)– Uninstall node script"
     colorized_echo yellow "  edit            $(tput sgr0)– Edit docker-compose.yml (via nano or vi)"
     colorized_echo yellow "  edit-env        $(tput sgr0)– Edit .env file (via nano or vi)"
-    colorized_echo yellow "  core-update     $(tput sgr0)– Update/Change Xray core"
+    colorized_echo yellow "  core-update     $(tput sgr0)– Update/Change node cores (xray or sing-box)"
     colorized_echo yellow "  geofiles        $(tput sgr0)– Download geoip and geosite files for specific regions"
     echo
     colorized_echo cyan "Install Options:"
@@ -1417,13 +1656,15 @@ geofiles_command() {
                 xray_assets_path="${container_path}/assets"
             else
                 xray_assets_path="$DATA_DIR/assets"
+                container_path="/var/lib/pg-node"
+                yq eval ".services[\"$service_name\"].volumes[0] = \"${DATA_DIR}:${container_path}\"" -i "$APP_DIR/docker-compose.yml"
             fi
         else
             xray_assets_path="$DATA_DIR/assets"
         fi
 
-        sed -i "s|^# *XRAY_ASSETS_PATH *=.*|XRAY_ASSETS_PATH = $xray_assets_path|" "$ENV_FILE"
-        grep -q '^XRAY_ASSETS_PATH =' "$ENV_FILE" || echo "XRAY_ASSETS_PATH = $xray_assets_path" >> "$ENV_FILE"
+        ensure_env_value "XRAY_ASSETS_PATH" "$xray_assets_path"
+        ensure_env_value "SINGBOX_ASSETS_PATH" "${container_path}/sing-box-core/assets"
         colorized_echo blue "XRAY_ASSETS_PATH updated in $ENV_FILE"
         colorized_echo blue "Restarting node services..."
         restart_command -n
@@ -1463,7 +1704,8 @@ logs)
     logs_command "$@"
     ;;
 core-update)
-    update_core_command
+    shift
+    update_core_command "$@"
     ;;
 geofiles)
     shift

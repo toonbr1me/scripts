@@ -1,7 +1,7 @@
 services:
   node:
     container_name: node
-    image: pasarguard/node:latest
+    image: toonbr1me/node:latest
     restart: always
     network_mode: host
     env_file: .env

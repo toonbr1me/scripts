@@ -293,7 +293,7 @@ verify_and_start_container() {
 }
 
 install_pasarguard_script() {
-    FETCH_REPO="PasarGuard/scripts"
+    FETCH_REPO="toonbr1me/scripts"
     SCRIPT_URL="https://github.com/$FETCH_REPO/raw/main/pasarguard.sh"
     colorized_echo blue "Installing pasarguard script"
     curl -sSL $SCRIPT_URL | install -m 755 /dev/stdin /usr/local/bin/pasarguard
@@ -2336,8 +2336,8 @@ install_pasarguard() {
     local major_version=$2
     local database_type=$3
 
-    FILES_URL_PREFIX="https://raw.githubusercontent.com/pasarguard/panel"
-    COMPOSE_FILES_URL_PREFIX="https://raw.githubusercontent.com/pasarguard/scripts/main"
+    FILES_URL_PREFIX="https://raw.githubusercontent.com/toonbr1me/panel"
+    COMPOSE_FILES_URL_PREFIX="https://raw.githubusercontent.com/toonbr1me/scripts/main"
 
     mkdir -p "$DATA_DIR"
     mkdir -p "$APP_DIR"
@@ -2422,9 +2422,9 @@ install_pasarguard() {
 
     # Install requested version
     if [ "$pasarguard_version" == "latest" ]; then
-        yq -i '.services.pasarguard.image = "pasarguard/panel:latest"' "$COMPOSE_FILE"
+        yq -i '.services.pasarguard.image = "toonbr1me/panel:latest"' "$COMPOSE_FILE"
     else
-        yq -i ".services.pasarguard.image = \"pasarguard/panel:${pasarguard_version}\"" "$COMPOSE_FILE"
+        yq -i ".services.pasarguard.image = \"toonbr1me/panel:${pasarguard_version}\"" "$COMPOSE_FILE"
     fi
     colorized_echo green "File saved in $APP_DIR/docker-compose.yml"
 
@@ -2690,7 +2690,7 @@ install_command() {
     # Function to check if a version exists in the GitHub releases
     check_version_exists() {
         local version=$1
-        repo_url="https://api.github.com/repos/pasarguard/panel/releases"
+        repo_url="https://api.github.com/repos/toonbr1me/panel/releases"
 
         if [ "$version" == "latest" ]; then
             latest_tag=$(curl -s ${repo_url}/latest | jq -r '.tag_name')
@@ -3158,7 +3158,7 @@ update_command() {
 }
 
 update_pasarguard_script() {
-    FETCH_REPO="pasarguard/scripts"
+    FETCH_REPO="toonbr1me/scripts"
     SCRIPT_URL="https://github.com/$FETCH_REPO/raw/main/pasarguard.sh"
     colorized_echo blue "Updating pasarguard script"
     curl -sSL $SCRIPT_URL | install -m 755 /dev/stdin /usr/local/bin/pasarguard
@@ -3213,10 +3213,10 @@ install_node_command() {
 
     if [ "$(id -u)" = "0" ]; then
         colorized_echo blue "Running node installation with sudo..."
-        sudo bash -c "$(curl -sL https://github.com/PasarGuard/scripts/raw/main/pg-node.sh)" @ install
+        sudo bash -c "$(curl -sL https://github.com/toonbr1me/scripts/raw/main/pg-node.sh)" @ install
     else
         colorized_echo blue "Running node installation without sudo..."
-        bash -c "$(curl -sL https://github.com/PasarGuard/scripts/raw/main/pg-node.sh)" @ install
+        bash -c "$(curl -sL https://github.com/toonbr1me/scripts/raw/main/pg-node.sh)" @ install
     fi
 
     if [ $? -eq 0 ]; then
