@@ -661,24 +661,26 @@ install_command() {
         repo_url="https://api.github.com/repos/toonbr1me/node/releases"
 
         if [ "$version" == "latest" ]; then
-            latest_tag=$(curl -s ${repo_url}/latest | jq -r '.tag_name')
+            latest_tag=$(curl -s ${repo_url}/latest | jq -r '.tag_name // empty')
 
-            # Check if there is any stable release of  node v1
-            if [ "$latest_tag" == "null" ]; then
-                return 1
+            # Allow forks without published releases to keep using the "latest" tag
+            if [ -z "$latest_tag" ]; then
+                colorized_echo yellow "No GitHub releases found for node fork; falling back to 'latest' tag."
             fi
             return 0
         fi
 
         if [ "$version" == "pre-release" ]; then
-            local latest_stable_tag=$(curl -s "$repo_url/latest" | jq -r '.tag_name')
-            local latest_pre_release_tag=$(curl -s "$repo_url" | jq -r '[.[] | select(.prerelease == true)][0].tag_name')
+            local latest_stable_tag=$(curl -s "$repo_url/latest" | jq -r '.tag_name // empty')
+            local latest_pre_release_tag=$(curl -s "$repo_url" | jq -r '[.[] | select(.prerelease == true)][0].tag_name // empty')
 
-            if [ "$latest_stable_tag" == "null" ] && [ "$latest_pre_release_tag" == "null" ]; then
-                return 1 # No releases found at all
-            elif [ "$latest_stable_tag" == "null" ]; then
+            if [ -z "$latest_stable_tag" ] && [ -z "$latest_pre_release_tag" ]; then
+                colorized_echo yellow "No releases found for node fork; defaulting pre-release to 'latest'."
+                node_version="latest"
+                return 0
+            elif [ -z "$latest_stable_tag" ]; then
                 node_version=$latest_pre_release_tag
-            elif [ "$latest_pre_release_tag" == "null" ]; then
+            elif [ -z "$latest_pre_release_tag" ]; then
                 node_version=$latest_stable_tag
             else
                 # Compare versions using sort -V
