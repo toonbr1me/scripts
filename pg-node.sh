@@ -511,6 +511,30 @@ install_node() {
     fi
 
     colorized_echo green "compose file modified successfully"
+
+    local container_path
+    container_path=$(sync_volume_and_get_container_path)
+    update_core_env_paths "xray" "$container_path"
+
+    local install_singbox_choice=""
+    if [ "$AUTO_CONFIRM" = true ]; then
+        install_singbox_choice=""
+    else
+        read -p "Install Sing-Box core alongside Xray? (y/N): " -r install_singbox_choice
+    fi
+
+    if [[ "$install_singbox_choice" =~ ^[Yy]$ ]]; then
+        local resolved_singbox_version
+        resolved_singbox_version=$(resolve_singbox_version "latest")
+        if [[ -z "$resolved_singbox_version" || "$resolved_singbox_version" == "null" ]]; then
+            colorized_echo yellow "Unable to determine latest Sing-Box release; skipping installation."
+        else
+            identify_the_operating_system_and_architecture
+            install_singbox_core "$resolved_singbox_version"
+            update_core_env_paths "sing-box" "$container_path"
+            colorized_echo green "Sing-Box core ${SELECTED_SINGBOX_VERSION:-$resolved_singbox_version} installed."
+        fi
+    fi
 }
 
 uninstall_node_script() {
