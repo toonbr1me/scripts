@@ -2389,7 +2389,7 @@ install_pasarguard() {
             echo "MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD" >>"$ENV_FILE"
         fi
 
-        if [ "$major_version" -eq 1 ]; then
+        if [ "${major_version:-1}" -eq 1 ]; then
             db_driver_scheme="$([[ "$database_type" =~ ^(mysql|mariadb)$ ]] && echo 'mysql+asyncmy' || echo 'postgresql+asyncpg')"
         else
             db_driver_scheme="$([[ "$database_type" =~ ^(mysql|mariadb)$ ]] && echo 'mysql+asyncmy' || echo 'postgresql+asyncpg')"
@@ -2410,7 +2410,7 @@ install_pasarguard() {
 
         sed -i 's/^# \(SQLALCHEMY_DATABASE_URL = .*\)$/\1/' "$APP_DIR/.env"
 
-        if [ "$major_version" -eq 1 ]; then
+        if [ "${major_version:-1}" -eq 1 ]; then
             db_driver_scheme="sqlite+aiosqlite"
         else
             db_driver_scheme="sqlite"
@@ -2679,6 +2679,9 @@ install_command() {
     if ! command -v curl >/dev/null 2>&1; then
         install_package curl
     fi
+    if ! command -v jq >/dev/null 2>&1; then
+        install_package jq
+    fi
     if ! command -v docker >/dev/null 2>&1; then
         install_docker
     fi
@@ -2694,7 +2697,11 @@ install_command() {
 
         if [ "$version" == "latest" ]; then
             latest_tag=$(curl -s ${repo_url}/latest | jq -r '.tag_name')
-            major_version=$(echo "$latest_tag" | sed 's/^v//' | sed 's/[^0-9]*\([0-9]*\)\..*/\1/')
+            if [ -z "$latest_tag" ] || [ "$latest_tag" == "null" ]; then
+                major_version=1
+            else
+                major_version=$(echo "$latest_tag" | sed 's/^v//' | sed 's/[^0-9]*\([0-9]*\)\..*/\1/')
+            fi
             return 0
         fi
 
